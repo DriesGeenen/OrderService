@@ -1,16 +1,16 @@
 'use strict';
 
-var config = require('../config/config');
-var jwt = require('jsonwebtoken');
-var request = require('request-promise');
+const config = require('../config/config');
+const jwt = require('jsonwebtoken');
+const request = require('request-promise');
 
-var orderDataServiceUrl = process.env.SCAN_SERVICE_URL || 'http://localhost:6602/orders';
-var configServiceUrl = process.env.CONFIG_SERVICE_URL || 'http://localhost:6610/config';
-var ecmrServiceUrl = process.env.ECMR_SERVICE_URL || 'http://localhost:6603/ecmrs';
-var printServiceUrl = process.env.PRINT_SERVICE_URL || 'http://localhost:6607/print';
+const orderDataServiceUrl = process.env.SCAN_SERVICE_URL || 'http://localhost:6602/orders';
+const configServiceUrl = process.env.CONFIG_SERVICE_URL || 'http://localhost:6610/config';
+const ecmrServiceUrl = process.env.ECMR_SERVICE_URL || 'http://localhost:6603/ecmrs';
+const printServiceUrl = process.env.PRINT_SERVICE_URL || 'http://localhost:6607/print';
 
 exports.buildEcmr = function (req, res) {
-    var freightInformation = req.body;
+    const freightInformation = req.body;
     /*
     driver: String,
     products: [{
@@ -19,10 +19,11 @@ exports.buildEcmr = function (req, res) {
     }]
     */
 
-    var orders;
-    var ecmrs;
+    let orders;
+    let ecmrs;
+    let errors = [];
 
-    var promise = requestOrderInformation(freightInformation.products);
+    const promise = requestOrderInformation(freightInformation.products);
     promise.then(function (response) {
         orders = JSON.parse(response).data;
         /*
@@ -39,32 +40,37 @@ exports.buildEcmr = function (req, res) {
          */
         return requestConfiguration();
     }, function (err) {
-        return res.status(500).json({success: false, msg: 'Failed to get orders', error: err});
+        errors.push(err);
+        //res.status(500).json({success: false, msg: 'Failed to get orders', error: err});
     }).then(function (response) {
-        var configuration = JSON.parse(response).data;
+        const configuration = (response.data !== null)? JSON.parse(response).data: {mainTransporter:{location:{}}, autographs:{}};
         /*
         mainTransporter: Contact,
         autographs:{
             transporter: String
         }
         */
+
         ecmrs = getEcmrs(orders, configuration, freightInformation.driver);
         return requestSaveEcmrs(ecmrs);
     }, function (err) {
-        return res.status(500).json({success: false, msg: 'Failed to get configuration', error: err});
+        errors.push(err)
+        //res.status(500).json({success: false, msg: 'Failed to get configuration', error: err});
     }).then(function () {
-        return requestPrintCmrs();
+        return requestPrintEcmrs(ecmrs);
     }, function (err) {
-        return res.status(500).json({success: false, msg: 'Failed to save ecmrs', error: err});
+        errors.push(err);
+        //res.status(500).json({success: false, msg: 'Failed to save ecmrs', error: err});
     }).then(function () {
-        return res.status(500).json({success: true, msg: 'Ecmrs have been saved and printed'});
+        res.json({success: true, msg: 'Ecmrs have been saved and printed (may not be true)', errors});
     }, function (err) {
-        return res.status(500).json({success: false, msg: 'Failed to print ecmrs', error: err});
+        errors.push(err);
+        res.json({success: false, msg: 'Print failed', errors});
     });
 };
 
 const requestOrderInformation = function (productArray) {
-    var options = {
+    const options = {
         url: orderDataServiceUrl + '/byarray',
         headers: {
             'Content-Type': 'application/json',
@@ -76,7 +82,7 @@ const requestOrderInformation = function (productArray) {
 };
 
 const requestConfiguration = function () {
-    var options = {
+    const options = {
         url: configServiceUrl,
         headers: {
             'Content-Type': 'application/json',
@@ -87,7 +93,7 @@ const requestConfiguration = function () {
 };
 
 const requestSaveEcmrs = function (ecmrs) {
-    var options = {
+    const options = {
         url: ecmrServiceUrl + '/many',
         headers: {
             'Content-Type': 'application/json',
@@ -98,8 +104,8 @@ const requestSaveEcmrs = function (ecmrs) {
     return request.post(options);
 };
 
-const requestPrintCmrs = function (ecmrs) {
-    var options = {
+const requestPrintEcmrs = function (ecmrs) {
+    const options = {
         url: printServiceUrl,
         headers: {
             'Content-Type': 'application/json',
@@ -119,12 +125,10 @@ const generateRfidToCmrServiceToken = function () {
 };
 
 const getEcmrs = function (orders, config, driver) {
-    var ecmrs = [];
-
-    for (var i = 0; i < orders.length; i++) {
+    const ecmrs = [];
+    for (let i = 0; i < orders.length; i++) {
         ecmrs.push(getEcmr(orders[i], config, driver));
     }
-
     return ecmrs;
 };
 
@@ -137,7 +141,9 @@ const getEcmr = function (order, config, driver) {
         },
         sender: order.sender,
         receiver: order.receiver,
-        deliveryLocation: order.receiver.location,  // factuuradres === leveradres
+        deliveryLocation:{
+            location: order.receiver.location
+        },
         mainTransporter: config.mainTransporter,
         reception: {
             location: order.receiver.location
